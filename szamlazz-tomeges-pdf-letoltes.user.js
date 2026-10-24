@@ -1,31 +1,66 @@
 // ==UserScript==
-// @name         Szamlazz.hu - PDF tömeges letöltés gomb
+// @name         Szamlazz.hu – PDF tömeges letöltés gomb
 // @namespace	 szamlazz-ingyen-letoltes
-// @version      1.0
+// @version      2026-10-24
 // @description  Ingyen letöltés gomb hozzáadása a számlalista fejléchez a #free szolgáltatáscsomagnál
 // @author       Földesi Mihály
 // @match        https://www.szamlazz.hu/app/szamlalista/ki
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=szamlazz.hu
-// @license      Attribution 4.0 International (CC BY 4.0 - https://creativecommons.org/licenses/by/4.0/)
+// @grant        GM_notification
 // @run-at       document-end
-// @grant        none
 // ==/UserScript==
 
-(function () {
+(function() {
 	'use strict';
 
 	// Configuration constants
-	const TARGET_SELECTOR = '#cdk-drop-list-0 > div.ndk2-table-flex-row.ndk2-table-header-row.ng-star-inserted > ndk2-table-header-cell:nth-child(2)';
-	const BUTTON_TEXT = ' Ingyen letöltés';
+	const BUTTON_TEXT = 'Ingyenes letöltés';
 	const BUTTON_ARIA = 'Ingyen letöltés gomb';
-	const SPACER_SELECTOR = 'ndk2-table-header-grid-item ndk2-spacer.ndk2-spacer-variant-s-fill';
 	const SCROLL_ROOT_SELECTOR = 'cdk-virtual-scroll-viewport, #cdk-drop-list-0';
 	const CLICK_DELAY_MS = 3000;
 	const DROPDOWN_DELAY_MS = 1000;
 	const OP_BTN_REGEX = /szamla-lista-(\d+)-operations-button-icon-svg/;
 	const DROPDOWN_TPL = (id) => `szamla-lista-${id}-operations-dropdown-icon-2`;
 	const DROPDOWN_ANY_REGEX = /szamla-lista-\d+-operations-dropdown-icon-2/;
-	const ALERT_MESSAGE = 'Hamarosan {count} db bizonylat PDF-et fog letölteni. Kérjük, ne használja a böngészőt a folyamat során!';
+	const ALERT_MESSAGE = 'Hamarosan {count} darab PDF bizonylat fog letöltődni.\nKérjük, ne használja a böngészőt a folyamat során!';
+	const ROUTE_CLASS_PREFIX = 'foldesistudio-';
+	const ROUTE_CLASS_FALLBACK = 'unknown';
+	const SPACER_SELECTOR = `.${ROUTE_CLASS_PREFIX}app-szamlalista .ndk2-table-header-grid .ndk2-paginator`; // position of the download button
+	const NOTIF_ICON_URL = 'https://www.google.com/s2/favicons?sz=64&domain=szamlazz.hu';
+	const iconSvg = `
+    <svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+      <path fill-rule="evenodd" clip-rule="evenodd" d="M11.78 7.159a.75.75 0 00-1.06 0l-1.97 1.97V1.75a.75.75 0 00-1.5 0v7.379l-1.97-1.97a.75.75 0 00-1.06 1.06l3.25 3.25L8 12l.53-.53 3.25-3.25a.75.75 0 000-1.061zM2.5 9.75a.75.75 0 00-1.5 0V13a2 2 0 002 2h10a2 2 0 002-2V9.75a.75.75 0 00-1.5 0V13a.5.5 0 01-.5.5H3a.5.5 0 01-.5-.5V9.75z"></path>
+    </svg>
+  `;
+
+	function pathnameToBodyClass(pathname) {
+		// Keep only the first 2 segments to avoid deep routes / filters.
+		const segments = String(pathname || '/')
+			.toLowerCase()
+			.split('?')[0]
+			.split('#')[0]
+			.split('/')
+			.filter(Boolean)
+			.slice(0, 2)
+			.map(s => s.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''))
+			.filter(Boolean);
+
+		const slug = segments.join('-').slice(0, 80);
+		return ROUTE_CLASS_PREFIX + (slug || ROUTE_CLASS_FALLBACK);
+	}
+
+	function syncBodyRouteClass() {
+		const body = document.body;
+		if (!body) return;
+
+		for (const cls of Array.from(body.classList)) {
+			if (cls.startsWith(ROUTE_CLASS_PREFIX)) {
+				body.classList.remove(cls);
+			}
+		}
+
+		body.classList.add(pathnameToBodyClass(window.location.pathname));
+	}
 
 	// Find the scrollable container for the invoice table
 	function findScrollContainer() {
@@ -47,12 +82,6 @@
 		await new Promise(r => setTimeout(r, 40));
 	}
 
-	const iconSvg = `
-    <svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-      <path fill-rule="evenodd" clip-rule="evenodd" d="M11.78 7.159a.75.75 0 00-1.06 0l-1.97 1.97V1.75a.75.75 0 00-1.5 0v7.379l-1.97-1.97a.75.75 0 00-1.06 1.06l3.25 3.25L8 12l.53-.53 3.25-3.25a.75.75 0 000-1.061zM2.5 9.75a.75.75 0 00-1.5 0V13a2 2 0 002 2h10a2 2 0 002-2V9.75a.75.75 0 00-1.5 0V13a.5.5 0 01-.5.5H3a.5.5 0 01-.5-.5V9.75z"></path>
-    </svg>
-  `;
-
 	// Helper: delay execution
 	const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -71,7 +100,7 @@
 	async function clickDropdownForId(id) {
 		const targetId = DROPDOWN_TPL(id);
 		const dropdown = await waitFor(() =>
-			document.querySelector(`.cdk-overlay-pane [data-testid="${targetId}"]`)
+			document.querySelector(`.cdk-overlay-pane [data-testid="${targetId}"]`),
 		);
 		if (dropdown) {
 			await delay(DROPDOWN_DELAY_MS);
@@ -125,10 +154,11 @@
 	// Build the custom download button with matching styles
 	function buildButton() {
 		const btn = document.createElement('button');
+		btn.className = `${ROUTE_CLASS_PREFIX}szamlazz-letoltes-gomb ndk2-button ndk2-button-secondary ndk2-button-size-s`;
 		btn.setAttribute('ndk2-button', '');
 		btn.setAttribute('variant', 'secondary');
 		btn.setAttribute('size', 's');
-		btn.className = 'ndk2-button ndk2-button-secondary ndk2-button-size-s misi-szamlazz-letoltes-gomb';
+		btn.setAttribute('style', 'order: 2;');
 		btn.setAttribute('aria-label', BUTTON_ARIA);
 
 		const icon = document.createElement('ndk2-icon');
@@ -156,18 +186,42 @@
 
 			// Collect all operation buttons from active rows
 			const targets = collectOperationButtons();
-			console.log('[Free Download] Found', targets.length, 'selected invoices');
+			const count = targets.length;
+			console.log('[Free Download] Found', count, 'selected invoices');
 
 			// Confirm with user
-			alert(ALERT_MESSAGE.replace('{count}', targets.length));
+			alert(ALERT_MESSAGE.replace('{count}', count));
 
 			// Trigger sequential downloads
-			if (targets.length) {
+			if (count) {
 				console.log('[Free Download] Starting sequential download clicks...');
+
+				GM_notification({
+					title: 'Bizonylatok letöltése elindult',
+					text: `Letöltésre ${count} darab PDF előkészítve.`,
+					image: NOTIF_ICON_URL,
+					timeout: 5000,
+				});
+
 				await clickButtonsSequentially(targets);
 				console.log('[Free Download] All download triggers completed');
+
+				GM_notification({
+					title: 'Bizonylatok letöltése sikeres',
+					text: `Összesen ${count} darab PDF lett ingyenesen letöltve.`,
+					image: NOTIF_ICON_URL,
+					timeout: 5000,
+				});
+
 			} else {
 				console.log('[Free Download] No invoices to download');
+
+				GM_notification({
+					title: 'Bizonylatok letöltése sikeretelen',
+					text: `Nem lett kijelölve letöltendő tétel.`,
+					image: NOTIF_ICON_URL,
+					timeout: 5000,
+				});
 			}
 		});
 
@@ -191,6 +245,19 @@
 	}
 
 	// Poll until injection succeeds
+	syncBodyRouteClass();
+
+	let lastPath = window.location.pathname;
+	setInterval(() => {
+		if (window.location.pathname !== lastPath) {
+			lastPath = window.location.pathname;
+			syncBodyRouteClass();
+		}
+	}, 300);
+
+	window.addEventListener('popstate', syncBodyRouteClass);
+	window.addEventListener('hashchange', syncBodyRouteClass);
+
 	console.log('[Free Download] Script loaded, waiting for injection point...');
 	const interval = setInterval(() => {
 		if (tryInject()) {
